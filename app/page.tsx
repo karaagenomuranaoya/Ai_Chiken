@@ -1,8 +1,8 @@
 import QuestionBrowser from "@/app/components/question-browser";
-import { getQuestionGroups } from "@/lib/questions";
+import { getQuestions } from "@/lib/questions";
 
 export default function Home() {
-  const groups = getQuestionGroups();
+  const questions = getQuestions();
 
-  return <QuestionBrowser groups={groups} />;
+  return <QuestionBrowser questions={questions} />;
 }

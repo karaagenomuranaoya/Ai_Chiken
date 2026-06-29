@@ -1,12 +1,23 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { questionFileNames } from "@/data/question-files";
-import { difficulties, type BigGenreGroup, type Difficulty, type Question } from "@/lib/question-types";
+import { type Question } from "@/lib/question-types";
 
-type RawQuestion = Omit<Question, "sourceFile">;
+type RawQuestion = Record<string, unknown>;
 
-function isDifficulty(value: unknown): value is Difficulty {
-  return typeof value === "string" && difficulties.includes(value as Difficulty);
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string" && item.trim() !== "");
+}
+
+function assertStringArray(
+  value: unknown,
+  fileName: string,
+  index: number,
+  field: string,
+): asserts value is string[] {
+  if (!isStringArray(value)) {
+    throw new Error(`${fileName} の ${index + 1} 件目: ${field} は空でない文字列の配列にしてください。`);
+  }
 }
 
 function assertQuestion(value: unknown, fileName: string, index: number): asserts value is RawQuestion {
@@ -15,7 +26,7 @@ function assertQuestion(value: unknown, fileName: string, index: number): assert
   }
 
   const question = value as Record<string, unknown>;
-  const requiredTextFields = ["bigGenre", "smallGenre", "heading", "body"] as const;
+  const requiredTextFields = ["heading", "body"] as const;
 
   for (const field of requiredTextFields) {
     if (typeof question[field] !== "string" || question[field].trim() === "") {
@@ -27,14 +38,18 @@ function assertQuestion(value: unknown, fileName: string, index: number): assert
     throw new Error(`${fileName} の ${index + 1} 件目: id は1以上の整数にしてください。`);
   }
 
-  if (!isDifficulty(question.difficulty)) {
-    throw new Error(
-      `${fileName} の ${index + 1} 件目: difficulty は ${difficulties.join(" / ")} のいずれかにしてください。`,
-    );
-  }
+  assertStringArray(question.tags, fileName, index, "tags");
 }
 
-export function getQuestionGroups(): BigGenreGroup[] {
+function asTrimmedString(value: unknown) {
+  return String(value).trim();
+}
+
+function trimStringArray(values: string[]) {
+  return values.map((value) => value.trim());
+}
+
+export function getQuestions(): Question[] {
   const questions = questionFileNames.flatMap((fileName) => {
     const filePath = path.join(process.cwd(), "data", "questions", fileName);
     const parsed = JSON.parse(readFileSync(filePath, "utf8")) as unknown;
@@ -47,32 +62,13 @@ export function getQuestionGroups(): BigGenreGroup[] {
       assertQuestion(question, fileName, index);
 
       return {
-        ...question,
-        bigGenre: question.bigGenre.trim(),
-        smallGenre: question.smallGenre.trim(),
-        heading: question.heading.trim(),
-        body: question.body.trim(),
-        sourceFile: fileName,
+        id: Number(question.id),
+        tags: trimStringArray(question.tags as string[]),
+        heading: asTrimmedString(question.heading),
+        body: asTrimmedString(question.body),
       };
     });
   });
 
-  const bigGenreMap = new Map<string, Map<string, Question[]>>();
-
-  for (const question of questions) {
-    const smallGenreMap = bigGenreMap.get(question.bigGenre) ?? new Map<string, Question[]>();
-    const smallGenreQuestions = smallGenreMap.get(question.smallGenre) ?? [];
-
-    smallGenreQuestions.push(question);
-    smallGenreMap.set(question.smallGenre, smallGenreQuestions);
-    bigGenreMap.set(question.bigGenre, smallGenreMap);
-  }
-
-  return Array.from(bigGenreMap, ([name, smallGenreMap]) => ({
-    name,
-    smallGenres: Array.from(smallGenreMap, ([smallGenreName, smallGenreQuestions]) => ({
-      name: smallGenreName,
-      questions: smallGenreQuestions.sort((first, second) => first.id - second.id),
-    })),
-  }));
+  return questions.sort((first, second) => second.id - first.id);
 }
