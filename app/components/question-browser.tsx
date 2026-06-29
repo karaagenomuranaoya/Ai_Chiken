@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { type Question } from "@/lib/question-types";
 
 const pageSize = 10;
@@ -13,9 +13,11 @@ type QuestionBrowserProps = {
 };
 
 export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
+  const [currentQuestions, setCurrentQuestions] = useState<Question[]>(questions);
   const [activeTab, setActiveTab] = useState<ActiveTab>("shuffle");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  const [isAdminOpen, setIsAdminOpen] = useState(false);
   const [shuffledQuestions, setShuffledQuestions] = useState<Question[]>(() =>
     questions.slice(0, pageSize),
   );
@@ -26,9 +28,21 @@ export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
   const copyResetTimer = useRef<number | null>(null);
 
   const sortedQuestions = useMemo(
-    () => [...questions].sort((first, second) => second.id - first.id),
-    [questions],
+    () => [...currentQuestions].sort((first, second) => second.id - first.id),
+    [currentQuestions],
   );
+
+  const availableTags = useMemo(() => {
+    const tags = new Set<string>();
+
+    for (const question of currentQuestions) {
+      for (const tag of question.tags) {
+        tags.add(tag);
+      }
+    }
+
+    return Array.from(tags).sort((first, second) => first.localeCompare(second, "ja"));
+  }, [currentQuestions]);
 
   const filteredQuestions = useMemo(() => {
     const normalizedQuery = normalizeText(query);
@@ -70,7 +84,15 @@ export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
   }, []);
 
   function shuffle() {
-    setShuffledQuestions(pickRandomQuestions(questions, pageSize));
+    setShuffledQuestions(pickRandomQuestions(currentQuestions, pageSize));
+  }
+
+  function addQuestion(question: Question) {
+    setCurrentQuestions((current) => [question, ...current]);
+    setShuffledQuestions((current) => [question, ...current].slice(0, pageSize));
+    setQuery("");
+    setPage(1);
+    setActiveTab("search");
   }
 
   async function copyQuestion(question: Question) {
@@ -140,6 +162,13 @@ export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
             />
             <span>AI知圏</span>
           </a>
+          <button
+            type="button"
+            onClick={() => setIsAdminOpen(true)}
+            className="min-h-10 rounded-md border border-white/55 bg-white/10 px-4 text-sm font-black text-white transition hover:bg-white/20 focus:outline-none focus:ring-4 focus:ring-white/30"
+          >
+            管理者
+          </button>
         </header>
 
         <div
@@ -168,6 +197,14 @@ export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
           />
         </div>
       </section>
+
+      {isAdminOpen ? (
+        <AdminDialog
+          availableTags={availableTags}
+          onClose={() => setIsAdminOpen(false)}
+          onAdd={addQuestion}
+        />
+      ) : null}
 
       <section className="px-5 py-8 sm:px-8 lg:px-12">
         <div className="mx-auto max-w-7xl">
@@ -258,6 +295,241 @@ export default function QuestionBrowser({ questions }: QuestionBrowserProps) {
         </div>
       </section>
     </main>
+  );
+}
+
+function AdminDialog({
+  availableTags,
+  onClose,
+  onAdd,
+}: {
+  availableTags: string[];
+  onClose: () => void;
+  onAdd: (question: Question) => void;
+}) {
+  const [password, setPassword] = useState("");
+  const [heading, setHeading] = useState("");
+  const [body, setBody] = useState("");
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [newTag, setNewTag] = useState("");
+  const [status, setStatus] = useState<{
+    tone: "success" | "error";
+    message: string;
+  } | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+
+  function toggleTag(tag: string) {
+    setSelectedTags((current) =>
+      current.includes(tag) ? current.filter((item) => item !== tag) : [...current, tag],
+    );
+  }
+
+  function addNewTag() {
+    const tag = newTag.trim();
+
+    if (!tag) {
+      return;
+    }
+
+    setSelectedTags((current) => (current.includes(tag) ? current : [...current, tag]));
+    setNewTag("");
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setStatus(null);
+    setIsSaving(true);
+
+    try {
+      const response = await fetch("/api/questions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          password,
+          heading,
+          body,
+          tags: selectedTags,
+        }),
+      });
+      const result = (await response.json()) as {
+        message?: string;
+        question?: Question;
+      };
+
+      if (!response.ok || !result.question) {
+        throw new Error(result.message ?? "追加に失敗しました。");
+      }
+
+      onAdd(result.question);
+      setHeading("");
+      setBody("");
+      setSelectedTags([]);
+      setNewTag("");
+      setStatus({ tone: "success", message: `No. ${result.question.id} を追加しました。` });
+    } catch (error) {
+      setStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "追加に失敗しました。",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/55 px-4 py-6">
+      <form
+        onSubmit={submit}
+        className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-soft sm:p-6"
+      >
+        <div className="mb-5 flex items-start justify-between gap-4 border-b border-mist-200 pb-4">
+          <div>
+            <p className="text-sm font-bold uppercase tracking-[0.22em] text-mist-600">
+              Admin
+            </p>
+            <h2 className="mt-2 text-2xl font-black tracking-normal">
+              質問を追加
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="min-h-10 rounded-md border border-mist-300 px-3 text-sm font-black text-ink transition hover:bg-mist-100"
+          >
+            閉じる
+          </button>
+        </div>
+
+        <div className="grid gap-4">
+          <label className="block">
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-mist-600">
+              パスワード
+            </span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="h-12 w-full rounded-md border border-mist-300 bg-white px-4 text-sm font-bold text-ink outline-none transition focus:border-mist-600 focus:ring-4 focus:ring-mist-200"
+              autoComplete="current-password"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-mist-600">
+              見出し
+            </span>
+            <input
+              value={heading}
+              onChange={(event) => setHeading(event.target.value)}
+              className="h-12 w-full rounded-md border border-mist-300 bg-white px-4 text-sm font-bold text-ink outline-none transition focus:border-mist-600 focus:ring-4 focus:ring-mist-200"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-mist-600">
+              質問
+            </span>
+            <textarea
+              value={body}
+              onChange={(event) => setBody(event.target.value)}
+              rows={7}
+              className="w-full resize-y rounded-md border border-mist-300 bg-white px-4 py-3 text-sm font-bold leading-7 text-ink outline-none transition focus:border-mist-600 focus:ring-4 focus:ring-mist-200"
+            />
+          </label>
+
+          <div>
+            <span className="mb-2 block text-xs font-black uppercase tracking-[0.18em] text-mist-600">
+              タグ
+            </span>
+            <div className="mb-3 flex gap-2">
+              <input
+                value={newTag}
+                onChange={(event) => setNewTag(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    addNewTag();
+                  }
+                }}
+                placeholder="新しいタグ"
+                className="h-11 min-w-0 flex-1 rounded-md border border-mist-300 bg-white px-4 text-sm font-bold text-ink outline-none transition placeholder:text-ink/35 focus:border-mist-600 focus:ring-4 focus:ring-mist-200"
+              />
+              <button
+                type="button"
+                onClick={addNewTag}
+                className="min-h-11 rounded-md bg-mist-600 px-4 text-sm font-black text-white transition hover:bg-mist-500"
+              >
+                作成
+              </button>
+            </div>
+            <div className="flex max-h-40 flex-wrap gap-2 overflow-y-auto rounded-md border border-mist-200 bg-mist-50 p-3">
+              {availableTags.map((tag) => {
+                const isSelected = selectedTags.includes(tag);
+
+                return (
+                  <button
+                    key={tag}
+                    type="button"
+                    onClick={() => toggleTag(tag)}
+                    className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                      isSelected
+                        ? "border-mist-600 bg-mist-600 text-white"
+                        : "border-mist-300 bg-white text-ink/72 hover:bg-mist-100"
+                    }`}
+                    aria-pressed={isSelected}
+                  >
+                    {tag}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {selectedTags.map((tag) => (
+                <button
+                  key={tag}
+                  type="button"
+                  onClick={() => toggleTag(tag)}
+                  className="rounded-full bg-ink px-3 py-1 text-xs font-bold text-white"
+                >
+                  {tag}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {status ? (
+            <p
+              className={`rounded-md px-4 py-3 text-sm font-bold ${
+                status.tone === "success"
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-rose-50 text-rose-700"
+              }`}
+            >
+              {status.message}
+            </p>
+          ) : null}
+
+          <div className="flex justify-end gap-2 border-t border-mist-200 pt-4">
+            <button
+              type="button"
+              onClick={onClose}
+              className="min-h-11 rounded-md border border-mist-300 px-5 text-sm font-black text-ink transition hover:bg-mist-100"
+            >
+              キャンセル
+            </button>
+            <button
+              type="submit"
+              disabled={isSaving}
+              className="min-h-11 rounded-md bg-mist-600 px-5 text-sm font-black text-white transition hover:bg-mist-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isSaving ? "追加中" : "追加"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
   );
 }
 
